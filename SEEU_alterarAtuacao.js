@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SEEU - Alterar atuação e retornar ao processo
-// @namespace    // @namespace    https://github.com/scheeee
+// @namespace    https://github.com/scheeee
 // @version      1.0
 // @description  Altera a área de atuação no SEEU e retorna automaticamente ao processo
 // @match        https://seeu.pje.jus.br/seeu/processo.do
@@ -98,3 +98,4 @@
     });
   }
 })();
+
