@@ -1,11 +1,13 @@
 // ==UserScript==
-// @name         SEEU - Alterar atuação e retornar ao processo
+// @name         SEEU - Alterar Atuação e Reabrir Último (Combinado)
 // @namespace    https://github.com/scheeee
-// @version      1.0
-// @description  Altera a área de atuação no SEEU e retorna automaticamente ao processo
-// @match        https://seeu.pje.jus.br/seeu/processo.do
-// @match        https://seeu.pje.jus.br/seeu/visualizacaoProcesso.do?*
-// @match        https://seeu.pje.jus.br/seeu/usuario/areaAtuacao.do?*
+// @version      2.1
+// @description  Combina as funções de alterar a atuação e reabrir o último processo.
+// @author       scheee & nadameu (versão combinada)
+// @match        https://seeu.pje.jus.br/seeu/processo.do*
+// @match        https://seeu.pje.jus.br/seeu/visualizacaoProcesso.do*
+// @match        https://seeu.pje.jus.br/seeu/usuario/areaAtuacao.do*
+// @match        https://seeu.pje.jus.br/seeu/historicoProcessosRecursos.do?actionType=listar
 // @match        https://seeu.pje.jus.br/seeu/inicio.do*
 // @grant        none
 // ==/UserScript==
@@ -13,27 +15,68 @@
 (function () {
   'use strict';
 
-  const RETURN_KEY = 'REABRIR_PROCESSO_DEPOIS';
+  // --- Constantes e Variáveis de ambos os scripts ---
+
+  // Do script "Alterar Atuação"
+  const RETURN_KEY = 'REABRIR_PROCESSO_DEPOIS_E_RECARREGAR';
   const BUTTON_CLASS = '_btn_v82dh_1';
 
-  const isProcessoPage = () =>
-    location.href.includes('/processo.do') || location.href.includes('/visualizacaoProcesso.do');
+  // Do script "Reabrir Último"
+  const REOPEN_NAME = 'seeu-reabrir-ultimo-processo';
+  const REOPEN_VALUE = 'REABRIR_ULTIMO';
+  const REOPEN_BUTTON_ID = 'gm-seeu-reabrir__button';
+  const REOPEN_STYLES = `#${REOPEN_BUTTON_ID}{background:hsl(333,30%,60%);border-radius:50%;padding:.4rem;margin:auto 8px}`;
 
-  const isAreaAtuacaoPage = () =>
-    location.href.includes('/areaAtuacao.do');
+  // --- Funções Auxiliares ---
 
-    if (isAreaAtuacaoPage()) {
-        const voltarPara = localStorage.getItem(RETURN_KEY);
-        if (voltarPara) {
-            localStorage.removeItem(RETURN_KEY);
-            window.top.location.href = voltarPara;
-        }
+  // Função para criar elementos HTML (do script "Reabrir Último")
+  function h(tag, props = null, ...children) {
+    const element = document.createElement(tag);
+    if (props) {
+      for (const [key, value] of Object.entries(props)) {
+        element[key] = value;
+      }
     }
-  if (isProcessoPage()) {
-    alterarAtuacao();
+    element.append(...children);
+    return element;
   }
 
-  function alterarAtuacao() {
+  // Função para requisições em segundo plano (do script "Alterar Atuação")
+  function XHR(url) {
+    return new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url);
+      xhr.responseType = 'document';
+      xhr.onload = () => res(xhr.response);
+      xhr.onerror = rej;
+      xhr.send();
+    });
+  }
+
+  // --- Lógica Principal por Página ---
+
+  /**
+   * Roteador principal que decide qual função executar com base na URL atual.
+   */
+  function router() {
+    const href = window.location.href;
+
+    // Adiciona o botão "Reabrir Último" no cabeçalho em quase todas as páginas
+    addReopenButtonToHeader();
+
+    if (href.includes('/processo.do') || href.includes('/visualizacaoProcesso.do')) {
+      handleProcessoPage();
+    } else if (href.includes('/areaAtuacao.do')) {
+      handleAreaAtuacaoPage();
+    } else if (href.includes('/historicoProcessosRecursos.do')) {
+      handleHistoricoPage();
+    }
+  }
+
+  /**
+   * Lógica para a página do processo: Adiciona o botão "Alternar para esta área de atuação".
+   */
+  function handleProcessoPage() {
     const areaAtual = document.querySelector('#areaatuacao')?.textContent ?? '';
     const linkAlterar = document.querySelector('#alterarAreaAtuacao');
 
@@ -49,53 +92,109 @@
 
     if (!urlAlterar || areaAtual === juizo) return;
 
-    const button = criarBotao(urlAlterar, juizo);
-    linhaJuizo.cells[1]?.append(' ', button);
-  }
-
-  function criarBotao(urlAlterar, juizoProcesso) {
     const button = document.createElement('input');
     button.type = 'button';
     button.className = BUTTON_CLASS;
-    button.value = 'Alternar para esta área de atuação';
+    button.value = 'Alternar área de atuação';
+    button.title = 'Muda a área de atuação e recarrega o processo a partir do histórico.';
     button.onclick = async evt => {
       evt.preventDefault();
       button.disabled = true;
       try {
-        await alternar(urlAlterar, juizoProcesso);
+        // Inicia o processo de alteração
+        const doc = await XHR(urlAlterar);
+        const links = Array.from(
+          doc.querySelectorAll('a[href][target="mainFrame"]')
+        ).filter(x => x.textContent?.trim() === juizo);
+        if (links.length !== 1) throw new Error('Link da nova atuação não encontrado');
+
+        const link = links[0];
+        // Salva a URL do processo atual para a lógica de retorno
+        localStorage.setItem(RETURN_KEY, window.location.href);
+        document.body.appendChild(link);
+        link.click();
       } catch (err) {
         console.error(err);
-        alert(`Erro ao alternar para "${juizoProcesso}". Você tem acesso a essa área?`);
-      } finally {
+        alert(`Erro ao alternar para "${juizo}". Você tem acesso a essa área?`);
         button.disabled = false;
       }
     };
-    return button;
+    linhaJuizo.cells[1]?.append(' ', button);
   }
 
-  async function alternar(url, area) {
-    const doc = await XHR(url);
-    const links = Array.from(
-      doc.querySelectorAll('a[href][target="mainFrame"]')
-    ).filter(x => x.textContent?.trim() === area);
-    if (links.length !== 1) throw new Error('Link da nova atuação não encontrado');
+  function handleAreaAtuacaoPage() {
+    const voltarPara = localStorage.getItem(RETURN_KEY);
+    if (voltarPara) {
+      localStorage.removeItem(RETURN_KEY);
+      // 1. Define o sinalizador para o script de "Reabrir Último".
+      localStorage.setItem(REOPEN_NAME, REOPEN_VALUE);
 
-    const link = links[0];
-    const processoAtual = window.location.href;
-    localStorage.setItem(RETURN_KEY, processoAtual);
-    document.body.appendChild(link);
-    link.click();
+      // 2. Clica no botão de histórico para iniciar o processo.
+      setTimeout(() => {
+        const header = document.querySelector('seeu-header')?.shadowRoot;
+        const historyLink = header?.querySelector('seeu-icon[name="mdi:history"]');
+        if (historyLink) {
+          historyLink.click();
+        } else {
+          // Fallback caso o botão não seja encontrado
+          console.warn('[SEEU Script Combinado] Botão de histórico não encontrado, usando fallback de URL.');
+          window.top.location.href = 'https://seeu.pje.jus.br/seeu/historicoProcessosRecursos.do?actionType=listar';
+        }
+      }, 500); // Atraso de 500ms para garantir que a página carregou
+    }
   }
 
-  function XHR(url) {
-    return new Promise((res, rej) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url);
-      xhr.responseType = 'document';
-      xhr.onload = () => res(xhr.response);
-      xhr.onerror = rej;
-      xhr.send();
+  /**
+   * Lógica para a página de histórico: Verifica o sinalizador e clica no último processo.
+   */
+  function handleHistoricoPage() {
+    if (localStorage.getItem(REOPEN_NAME) === REOPEN_VALUE) {
+      localStorage.removeItem(REOPEN_NAME);
+
+      // Adiciona um atraso para garantir que a tabela de resultados esteja carregada.
+      setTimeout(() => {
+          const links = document.querySelectorAll(
+            'table.resultTable a.link[href^="/seeu/historicoProcessosRecursos.do?"]'
+          );
+          if (links.length > 0) {
+            links[0].click(); // Clica no primeiro processo da lista
+          } else {
+            console.error('Não há processos no histórico para reabrir.');
+          }
+      }, 500); // Atraso de 500ms para aguardar a renderização da tabela
+    }
+  }
+
+  /**
+   * Adiciona o botão "Reabrir Último" no cabeçalho (funcionalidade original do segundo script).
+   */
+  function addReopenButtonToHeader() {
+    const header = document.querySelector('seeu-header');
+    if (!header?.shadowRoot || header.shadowRoot.querySelector(`#${REOPEN_BUTTON_ID}`)) {
+      return; // Sai se o cabeçalho não existir ou se o botão já foi adicionado
+    }
+
+    header.shadowRoot.appendChild(h('style', {}, REOPEN_STYLES));
+    const historyLink = header.shadowRoot.querySelector('seeu-icon[name="mdi:history"]');
+    if (!historyLink) return;
+
+    const reopenButton = historyLink.cloneNode(true);
+    reopenButton.id = REOPEN_BUTTON_ID;
+    reopenButton.setAttribute('name', 'mdi:reload');
+    reopenButton.dataset.tooltip = 'Reabrir último processo';
+    reopenButton.addEventListener('click', evt => {
+      evt.preventDefault();
+      localStorage.setItem(REOPEN_NAME, REOPEN_VALUE);
+      historyLink.click();
     });
+
+    historyLink.parentElement.insertBefore(reopenButton, historyLink);
+  }
+
+  // Inicia o script
+  try {
+    router();
+  } catch (err) {
+    console.error('[SEEU Script Combinado] Ocorreu um erro:', err);
   }
 })();
-
